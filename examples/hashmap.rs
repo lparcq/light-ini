@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 
-type HandlerError = String;
+#[derive(Debug)]
+enum HandlerError {
+    DuplicateSection(String),
+    UnknownSection(String),
+}
 
 struct Handler {
     pub globals: HashMap<String, String>,
@@ -27,7 +31,7 @@ impl IniHandler for Handler {
     fn section(&mut self, name: &str) -> Result<(), Self::Error> {
         self.section_name = Some(name.to_string());
         match self.sections.insert(name.to_string(), HashMap::new()) {
-            Some(_) => Err(format!("{}: duplicate section", name)),
+            Some(_) => Err(HandlerError::DuplicateSection(name.to_string())),
             None => Ok(()),
         }
     }
@@ -43,7 +47,7 @@ impl IniHandler for Handler {
                     section.insert(key.to_string(), value.to_string());
                     Ok(())
                 }
-                None => return Err(format!("{}: unknown section", section_name)),
+                None => return Err(HandlerError::UnknownSection(section_name.to_string())),
             },
         }
     }

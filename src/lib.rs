@@ -4,7 +4,33 @@
 //! The handler must implement `IniHandler`.
 //!
 //! ```
+//! use light_ini::{IniHandler, IniParser};
 //!
+//! struct Handler {
+//! }
+//!
+//! impl IniHandler for Handler {
+//!     type Error = ();
+//!
+//!     fn section(&mut self, name: &str) -> Result<(), Self::Error> {
+//!         println!("section {}", name);
+//!         Ok(())
+//!     }
+//!
+//!     fn option(&mut self, key: &str, value: &str) -> Result<(), Self::Error> {
+//!         println!("option {} is {}", key, value);
+//!         Ok(())
+//!     }
+//!
+//!     fn comment(&mut self, comment: &str) -> Result<(), Self::Error> {
+//!         println!("comment: {}", comment);
+//!         Ok(())
+//!     }
+//! }
+//!
+//! let mut handler = Handler{};
+//! let mut parser = IniParser::new(&mut handler);
+//! parser.parse_file("example.ini");
 //! ```
 
 use nom::{
