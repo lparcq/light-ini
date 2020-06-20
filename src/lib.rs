@@ -62,7 +62,9 @@ pub trait IniHandler {
     fn option(&mut self, key: &str, value: &str) -> Result<(), Self::Error>;
 
     /// Called for each comment
-    fn comment(&mut self, comment: &str) -> Result<(), Self::Error>;
+    fn comment(&mut self, _: &str) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 // Parse comments starting with a semi colon.

@@ -51,10 +51,6 @@ impl IniHandler for Handler {
             },
         }
     }
-
-    fn comment(&mut self, _: &str) -> Result<(), Self::Error> {
-        Ok(())
-    }
 }
 
 fn main() {
