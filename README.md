@@ -5,8 +5,8 @@ Light INI parser
 
 This library implements an event-driven parser for the [INI file format](https://en.wikipedia.org/wiki/INI_file).
 
-It doesn't load It's an alternative to [rust-ini](https://crates.io/crates/rust-ini) that avoids building an intermediate hash map
-if it's not needed.
+It doesn't load data in a container. It's an alternative to [rust-ini](https://crates.io/crates/rust-ini)
+that avoids building an intermediate hash map if it's not needed.
 
 ```toml
 [dependencies]

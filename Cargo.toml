@@ -1,10 +1,11 @@
 [package]
 name = "light-ini"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Laurent Pelecq <lpelecq+rust@circoise.eu>"]
 description = "Event-driven parser for the INI file format"
 readme = "README.md"
 homepage = "https://github.com/lparcq/light-ini"
+documentation = "https://docs.rs/light-ini"
 license = "MIT"
 categories = ["config", "parser-implementations"]
 edition = "2018"
