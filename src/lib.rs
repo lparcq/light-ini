@@ -4,13 +4,12 @@
 //! The handler must implement `IniHandler`.
 //!
 //! ```
-//! use light_ini::{IniHandler, IniParser};
+//! use light_ini::{IniHandler, IniParser, IniHandlerError};
 //!
-//! struct Handler {
-//! }
+//! struct Handler {}
 //!
 //! impl IniHandler for Handler {
-//!     type Error = ();
+//!     type Error = IniHandlerError;
 //!
 //!     fn section(&mut self, name: &str) -> Result<(), Self::Error> {
 //!         println!("section {}", name);
@@ -39,21 +38,55 @@ use nom::{
     combinator::all_consuming,
     do_parse, is_not, named, opt,
 };
+use std::error;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::Path;
 
 #[derive(Debug)]
+/// Convenient error type for handlers that don't need detailed errors.
+pub struct IniHandlerError {}
+
+impl fmt::Display for IniHandlerError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(fmt, "handler failure")
+    }
+}
+
+impl error::Error for IniHandlerError {}
+
+#[derive(Debug)]
 /// Errors for INI format parsing
-pub enum IniError<HandlerError> {
+pub enum IniError<HandlerError: fmt::Debug + error::Error> {
     InvalidLine(String),
     Handler(HandlerError),
     Io(io::Error),
 }
 
+impl<HandlerError: fmt::Debug + error::Error> fmt::Display for IniError<HandlerError> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IniError::InvalidLine(line) => write!(f, "invalid line: {}", line),
+            IniError::Handler(err) => write!(f, "handler error: {:?}", err),
+            IniError::Io(err) => write!(f, "io error: {:?}", err),
+        }
+    }
+}
+
+impl<HandlerError: fmt::Debug + error::Error> error::Error for IniError<HandlerError> {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            IniError::InvalidLine(_) => None,
+            IniError::Handler(err) => err.source(),
+            IniError::Io(err) => err.source(),
+        }
+    }
+}
+
 /// Interface for the INI format handler
 pub trait IniHandler {
-    type Error;
+    type Error: fmt::Debug;
 
     /// Called when a section is found
     fn section(&mut self, name: &str) -> Result<(), Self::Error>;
@@ -114,11 +147,11 @@ macro_rules! map_herror {
 }
 
 /// INI format parser.
-pub struct IniParser<'a, Error> {
+pub struct IniParser<'a, Error: fmt::Debug + error::Error> {
     handler: &'a mut dyn IniHandler<Error = Error>,
 }
 
-impl<'a, Error> IniParser<'a, Error> {
+impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
     /// Create a parser using the given handler.
     pub fn new(handler: &'a mut dyn IniHandler<Error = Error>) -> IniParser<'a, Error> {
         IniParser { handler }
@@ -175,6 +208,8 @@ mod tests {
         all_consuming, parse_blank, parse_comment, parse_option, parse_section, IniHandler,
         IniParser,
     };
+    use std::error;
+    use std::fmt;
     use std::io::{self, Seek, Write};
 
     #[test]
@@ -218,6 +253,17 @@ mod tests {
         InvalidSection,
         InvalidOption,
     }
+
+    impl fmt::Display for ConfigError {
+        fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                ConfigError::InvalidSection => write!(fmt, "invalid section"),
+                ConfigError::InvalidOption => write!(fmt, "invalid option"),
+            }
+        }
+    }
+
+    impl error::Error for ConfigError {}
 
     enum ConfigSection {
         Default,
