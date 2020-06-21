@@ -1,6 +1,8 @@
 Light INI parser
 ================
 
+![Rust](https://github.com/lparcq/light-ini/workflows/Rust/badge.svg)
+
 This library implements an event-driven parser for the [INI file format](https://en.wikipedia.org/wiki/INI_file).
 
 It doesn't load It's an alternative to [rust-ini](https://crates.io/crates/rust-ini) that avoids building an intermediate hash map
