@@ -13,7 +13,7 @@ that avoids building an intermediate hash map if it's not needed.
 light_ini = "0.1"
 ```
 
-See the documentation and examples for details.
+See the [documentation](https://docs.rs/light-ini) and examples for details.
 
 ## Format
 
