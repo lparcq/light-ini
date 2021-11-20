@@ -33,10 +33,11 @@
 //! ```
 
 use nom::{
-    call, char,
-    character::complete::{multispace0, space0},
+    IResult,
+    character::complete::{space0, char, not_line_ending},
+    bytes::complete::is_not,
     combinator::all_consuming,
-    do_parse, is_not, named, opt,
+        sequence::{delimited, preceded, terminated, tuple}
 };
 use std::error;
 use std::fmt;
@@ -101,48 +102,33 @@ pub trait IniHandler {
 }
 
 // Parse comments starting with a semi colon.
-named!(parse_comment<&str,&str>,
-  do_parse!(
-      space0
-      >> char!(';')
-      >> space0
-      >> ("")
-  )
-);
+fn parse_comment(input: &str) -> IResult<&str,&str> {
+    let semicolon = char(';');
+    let (comment, _) = delimited(space0, semicolon, space0)(input)?;
+    Ok(("", comment))
+}
 
 // Parse a section between square brackets.
-named!(parse_section<&str, &str>,
-  do_parse!(
-     char!('[')
-     >> opt!(space0)
-     >> name: is_not!(" \t\r\n]")
-     >> opt!(space0)
-     >> char!(']')
-     >> multispace0
-     >> (name)
-  )
-);
+fn parse_section(input: &str) -> IResult<&str,&str> {
+    terminated(delimited(char('['), delimited(space0, is_not(" \t\r\n]"), space0), char(']')), space0)(input)
+}
 
 // Parse an option as "key = value"
-named!(parse_option<&str, &str>,
-  do_parse!(
-     key: is_not!(" ;=")
-     >> opt!(space0)
-     >> char!('=')
-     >> opt!(space0)
-     >> (key)
-  )
-);
+fn parse_option(input: &str) -> IResult<&str,(&str, &str)> {
+    let is_key = is_not(" ;=");
+    let is_equal = delimited(space0, char('='), space0);
+    tuple((is_key, preceded(is_equal, not_line_ending)))(input)
+}
 
 // Parse a blank line
-named!(parse_blank<&str,&str>,
-   call!(multispace0)
-);
+fn parse_blank(input: &str) -> IResult<&str,&str> {
+    space0(input)
+}
 
 // Convert nom errors to crate errors.
 macro_rules! map_herror {
     ($res:expr) => {
-        $res.map_err(|err| IniError::Handler(err))
+        $res.map_err(IniError::Handler)
     };
 }
 
@@ -160,11 +146,11 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
     /// Parse one line without trailing newline character.
     fn parse_ini_line(&mut self, line: &str) -> Result<(), IniError<Error>> {
         match parse_comment(line) {
-            Ok((comment, _)) => map_herror!(self.handler.comment(comment)),
+            Ok((_, comment)) => map_herror!(self.handler.comment(comment)),
             Err(_) => match all_consuming(parse_section)(line) {
                 Ok((_, name)) => map_herror!(self.handler.section(name)),
-                Err(_) => match parse_option(line) {
-                    Ok((value, key)) => map_herror!(self.handler.option(key, value)),
+                Err(_) => match all_consuming(parse_option)(line) {
+                    Ok((_, (key, value))) => map_herror!(self.handler.option(key, value.trim_end())),
                     Err(_) => match all_consuming(parse_blank)(line) {
                         Ok(_) => Ok(()),
                         Err(_) => Err(IniError::InvalidLine(line.to_string())),
@@ -196,7 +182,7 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
     where
         P: AsRef<Path>,
     {
-        let file = File::open(path).map_err(|err| IniError::Io(err))?;
+        let file = File::open(path).map_err(IniError::Io)?;
         self.parse(file)
     }
 }
@@ -205,7 +191,7 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
 mod tests {
 
     use super::{
-        all_consuming, parse_blank, parse_comment, parse_option, parse_section, IniHandler,
+        all_consuming, parse_comment, parse_option, parse_section, parse_blank, IniHandler,
         IniParser,
     };
     use std::error;
@@ -214,11 +200,11 @@ mod tests {
 
     #[test]
     fn parse_sections() {
-        for line in &["[one]\n", "[ one ]  "] {
+        for line in &["[one]", "[ one ]  "] {
             let (_, name) = all_consuming(parse_section)(line).unwrap();
             assert_eq!("one", name);
         }
-        for line in &["[one\n", "name = value"] {
+        for line in &["[one", "name = value"] {
             let res = all_consuming(parse_section)(line);
             assert!(res.is_err(), "parsing should have failed for: {}", line);
         }
@@ -226,16 +212,18 @@ mod tests {
 
     #[test]
     fn parse_options() {
-        for line in &["name = test", "name = one two three  "] {
-            let (value, key) = parse_option(line).unwrap();
-            assert_eq!("name", key);
-            assert!(value.len() > 0);
+        let data = [ ("name = test", "name", "test"), ("name=one two three  ", "name", "one two three") ];
+        for (input, expected_key, expected_value) in data {
+            let (output, (key, value)) = parse_option(input).unwrap();
+            assert_eq!(expected_key, key);
+            assert_eq!(expected_value, value.trim_end());
+            assert!(output.is_empty());
         }
     }
 
     #[test]
     fn parse_blank_lines() {
-        for line in &["\n", "  \t  \n"] {
+        for line in &["", "  \t  "] {
             all_consuming(parse_blank)(line).unwrap();
         }
     }
@@ -243,8 +231,9 @@ mod tests {
     #[test]
     fn parse_comments() {
         for line in &["; comment", "  ; comment"] {
-            let (comment, _) = parse_comment(line).unwrap();
+            let (output, comment) = parse_comment(line).unwrap();
             assert_eq!("comment", comment);
+            assert!(output.is_empty());
         }
     }
 
