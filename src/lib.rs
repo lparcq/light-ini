@@ -102,8 +102,8 @@ pub trait IniHandler {
 }
 
 // Parse comments starting with a semi colon.
-fn parse_comment(input: &str) -> IResult<&str, &str> {
-    let semicolon = char(';');
+fn parse_comment(input: &str, start_comment: char) -> IResult<&str, &str> {
+    let semicolon = char(start_comment);
     let (comment, _) = delimited(space0, semicolon, space0)(input)?;
     Ok(("", comment))
 }
@@ -142,17 +142,28 @@ macro_rules! map_herror {
 /// INI format parser.
 pub struct IniParser<'a, Error: fmt::Debug + error::Error> {
     handler: &'a mut dyn IniHandler<Error = Error>,
+    start_comment: char,
 }
 
 impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
     /// Create a parser using the given handler.
     pub fn new(handler: &'a mut dyn IniHandler<Error = Error>) -> IniParser<'a, Error> {
-        IniParser { handler }
+        Self::with_start_comment(handler, ';')
+    }
+
+    pub fn with_start_comment(
+        handler: &'a mut dyn IniHandler<Error = Error>,
+        start_comment: char,
+    ) -> IniParser<'a, Error> {
+        Self {
+            handler,
+            start_comment,
+        }
     }
 
     /// Parse one line without trailing newline character.
     fn parse_ini_line(&mut self, line: &str) -> Result<(), IniError<Error>> {
-        match parse_comment(line) {
+        match parse_comment(line, self.start_comment) {
             Ok((_, comment)) => map_herror!(self.handler.comment(comment)),
             Err(_) => match all_consuming(parse_section)(line) {
                 Ok((_, name)) => map_herror!(self.handler.section(name)),
@@ -243,7 +254,7 @@ mod tests {
     #[test]
     fn parse_comments() {
         for line in &["; comment", "  ; comment"] {
-            let (output, comment) = parse_comment(line).unwrap();
+            let (output, comment) = parse_comment(line, ';').unwrap();
             assert_eq!("comment", comment);
             assert!(output.is_empty());
         }
@@ -275,7 +286,7 @@ mod tests {
         section: ConfigSection,
         pub name: Option<String>,
         pub level: Option<String>,
-        pub has_comments: bool,
+        pub last_comment: Option<String>,
     }
 
     impl Config {
@@ -284,7 +295,7 @@ mod tests {
                 section: ConfigSection::Default,
                 name: None,
                 level: None,
-                has_comments: false,
+                last_comment: None,
             }
         }
     }
@@ -311,8 +322,8 @@ mod tests {
             Ok(())
         }
 
-        fn comment(&mut self, _: &str) -> Result<(), Self::Error> {
-            self.has_comments = true;
+        fn comment(&mut self, comment: &str) -> Result<(), Self::Error> {
+            self.last_comment = Some(comment.to_string());
             Ok(())
         }
     }
@@ -333,7 +344,25 @@ level = error
         let mut parser = IniParser::new(&mut handler);
         parser.parse(buf).unwrap();
         assert_eq!(Some("test suite".to_string()), handler.name);
-        assert!(handler.has_comments);
+        assert_eq!(Some("logging section".to_string()), handler.last_comment);
+        Ok(())
+    }
+
+    const VALID_INI_ALT_COMMENT: &str = "# logging section
+[logging]
+level = error
+";
+
+    #[test]
+    fn parse_valid_ini_alt_comment() -> io::Result<()> {
+        let mut buf = io::Cursor::new(Vec::<u8>::new());
+        writeln!(buf, "{}", VALID_INI_ALT_COMMENT)?;
+        buf.seek(io::SeekFrom::Start(0))?;
+        let mut handler = Config::new();
+        let mut parser = IniParser::with_start_comment(&mut handler, '#');
+        parser.parse(buf).unwrap();
+        assert_eq!(Some("logging section".to_string()), handler.last_comment);
+        assert_eq!(Some("error".to_string()), handler.level);
         Ok(())
     }
 
