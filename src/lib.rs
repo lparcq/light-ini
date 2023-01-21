@@ -33,11 +33,11 @@
 //! ```
 
 use nom::{
-    IResult,
-    character::complete::{space0, char, not_line_ending},
     bytes::complete::is_not,
+    character::complete::{char, not_line_ending, space0},
     combinator::all_consuming,
-        sequence::{delimited, preceded, terminated, tuple}
+    sequence::{delimited, preceded, terminated, tuple},
+    IResult,
 };
 use std::error;
 use std::fmt;
@@ -102,26 +102,33 @@ pub trait IniHandler {
 }
 
 // Parse comments starting with a semi colon.
-fn parse_comment(input: &str) -> IResult<&str,&str> {
+fn parse_comment(input: &str) -> IResult<&str, &str> {
     let semicolon = char(';');
     let (comment, _) = delimited(space0, semicolon, space0)(input)?;
     Ok(("", comment))
 }
 
 // Parse a section between square brackets.
-fn parse_section(input: &str) -> IResult<&str,&str> {
-    terminated(delimited(char('['), delimited(space0, is_not(" \t\r\n]"), space0), char(']')), space0)(input)
+fn parse_section(input: &str) -> IResult<&str, &str> {
+    terminated(
+        delimited(
+            char('['),
+            delimited(space0, is_not(" \t\r\n]"), space0),
+            char(']'),
+        ),
+        space0,
+    )(input)
 }
 
 // Parse an option as "key = value"
-fn parse_option(input: &str) -> IResult<&str,(&str, &str)> {
+fn parse_option(input: &str) -> IResult<&str, (&str, &str)> {
     let is_key = is_not(" ;=");
     let is_equal = delimited(space0, char('='), space0);
     tuple((is_key, preceded(is_equal, not_line_ending)))(input)
 }
 
 // Parse a blank line
-fn parse_blank(input: &str) -> IResult<&str,&str> {
+fn parse_blank(input: &str) -> IResult<&str, &str> {
     space0(input)
 }
 
@@ -150,7 +157,9 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
             Err(_) => match all_consuming(parse_section)(line) {
                 Ok((_, name)) => map_herror!(self.handler.section(name)),
                 Err(_) => match all_consuming(parse_option)(line) {
-                    Ok((_, (key, value))) => map_herror!(self.handler.option(key, value.trim_end())),
+                    Ok((_, (key, value))) => {
+                        map_herror!(self.handler.option(key, value.trim_end()))
+                    }
                     Err(_) => match all_consuming(parse_blank)(line) {
                         Ok(_) => Ok(()),
                         Err(_) => Err(IniError::InvalidLine(line.to_string())),
@@ -191,7 +200,7 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
 mod tests {
 
     use super::{
-        all_consuming, parse_comment, parse_option, parse_section, parse_blank, IniHandler,
+        all_consuming, parse_blank, parse_comment, parse_option, parse_section, IniHandler,
         IniParser,
     };
     use std::error;
@@ -212,7 +221,10 @@ mod tests {
 
     #[test]
     fn parse_options() {
-        let data = [ ("name = test", "name", "test"), ("name=one two three  ", "name", "one two three") ];
+        let data = [
+            ("name = test", "name", "test"),
+            ("name=one two three  ", "name", "one two three"),
+        ];
         for (input, expected_key, expected_value) in data {
             let (output, (key, value)) = parse_option(input).unwrap();
             assert_eq!(expected_key, key);
