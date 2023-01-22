@@ -151,6 +151,7 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
         Self::with_start_comment(handler, ';')
     }
 
+    /// Create a parser using the given character as start of comment.
     pub fn with_start_comment(
         handler: &'a mut dyn IniHandler<Error = Error>,
         start_comment: char,
