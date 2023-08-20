@@ -10,7 +10,7 @@ that avoids building an intermediate hash map if it's not necessary.
 
 ```toml
 [dependencies]
-light_ini = "0.2"
+light_ini = "0.3"
 ```
 
 See the [documentation](https://docs.rs/light-ini) and examples for details.

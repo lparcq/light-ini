@@ -1,15 +1,13 @@
 use light_ini::{IniHandler, IniParser};
-use std::collections::HashMap;
-use std::env;
-use std::error;
-use std::fmt;
-use std::path::PathBuf;
+use std::{collections::HashMap, env, error, fmt, path::PathBuf};
 
 #[derive(Debug)]
 enum HandlerError {
     DuplicateSection(String),
     UnknownSection(String),
 }
+
+impl error::Error for HandlerError {}
 
 impl fmt::Display for HandlerError {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -19,8 +17,6 @@ impl fmt::Display for HandlerError {
         }
     }
 }
-
-impl error::Error for HandlerError {}
 
 struct Handler {
     pub globals: HashMap<String, String>,

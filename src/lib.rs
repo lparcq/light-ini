@@ -32,18 +32,13 @@
 //! parser.parse_file("example.ini");
 //! ```
 
-use nom::{
-    bytes::complete::is_not,
-    character::complete::{char, not_line_ending, space0},
-    combinator::all_consuming,
-    sequence::{delimited, preceded, terminated, tuple},
-    IResult,
+use std::{
+    convert::From,
+    error, fmt,
+    fs::File,
+    io::{self, BufRead, BufReader, Read},
+    path::Path,
 };
-use std::error;
-use std::fmt;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::Path;
 
 #[derive(Debug)]
 /// Convenient error type for handlers that don't need detailed errors.
@@ -60,7 +55,7 @@ impl error::Error for IniHandlerError {}
 #[derive(Debug)]
 /// Errors for INI format parsing
 pub enum IniError<HandlerError: fmt::Debug + error::Error> {
-    InvalidLine(String),
+    InvalidLine(usize),
     Handler(HandlerError),
     Io(io::Error),
 }
@@ -70,7 +65,7 @@ impl<HandlerError: fmt::Debug + error::Error> fmt::Display for IniError<HandlerE
         match self {
             IniError::InvalidLine(line) => write!(f, "invalid line: {}", line),
             IniError::Handler(err) => write!(f, "handler error: {:?}", err),
-            IniError::Io(err) => write!(f, "io error: {:?}", err),
+            IniError::Io(err) => write!(f, "input/output error: {:?}", err),
         }
     }
 }
@@ -82,6 +77,12 @@ impl<HandlerError: fmt::Debug + error::Error> error::Error for IniError<HandlerE
             IniError::Handler(err) => err.source(),
             IniError::Io(err) => err.source(),
         }
+    }
+}
+
+impl<HandlerError: fmt::Debug + error::Error> From<HandlerError> for IniError<HandlerError> {
+    fn from(err: HandlerError) -> Self {
+        Self::Handler(err)
     }
 }
 
@@ -101,48 +102,10 @@ pub trait IniHandler {
     }
 }
 
-// Parse comments starting with a semi colon.
-fn parse_comment(input: &str, start_comment: char) -> IResult<&str, &str> {
-    let semicolon = char(start_comment);
-    let (comment, _) = delimited(space0, semicolon, space0)(input)?;
-    Ok(("", comment))
-}
-
-// Parse a section between square brackets.
-fn parse_section(input: &str) -> IResult<&str, &str> {
-    terminated(
-        delimited(
-            char('['),
-            delimited(space0, is_not(" \t\r\n]"), space0),
-            char(']'),
-        ),
-        space0,
-    )(input)
-}
-
-// Parse an option as "key = value"
-fn parse_option(input: &str) -> IResult<&str, (&str, &str)> {
-    let is_key = is_not(" ;=");
-    let is_equal = delimited(space0, char('='), space0);
-    tuple((is_key, preceded(is_equal, not_line_ending)))(input)
-}
-
-// Parse a blank line
-fn parse_blank(input: &str) -> IResult<&str, &str> {
-    space0(input)
-}
-
-// Convert nom errors to crate errors.
-macro_rules! map_herror {
-    ($res:expr) => {
-        $res.map_err(IniError::Handler)
-    };
-}
-
 /// INI format parser.
 pub struct IniParser<'a, Error: fmt::Debug + error::Error> {
     handler: &'a mut dyn IniHandler<Error = Error>,
-    start_comment: char,
+    start_comment: String,
 }
 
 impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
@@ -156,6 +119,7 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
         handler: &'a mut dyn IniHandler<Error = Error>,
         start_comment: char,
     ) -> IniParser<'a, Error> {
+        let start_comment = format!("{}", start_comment);
         Self {
             handler,
             start_comment,
@@ -163,29 +127,45 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
     }
 
     /// Parse one line without trailing newline character.
-    fn parse_ini_line(&mut self, line: &str) -> Result<(), IniError<Error>> {
-        match parse_comment(line, self.start_comment) {
-            Ok((_, comment)) => map_herror!(self.handler.comment(comment)),
-            Err(_) => match all_consuming(parse_section)(line) {
-                Ok((_, name)) => map_herror!(self.handler.section(name)),
-                Err(_) => match all_consuming(parse_option)(line) {
-                    Ok((_, (key, value))) => {
-                        map_herror!(self.handler.option(key, value.trim_end()))
+    fn parse_ini_line(&mut self, line: &str, lineno: usize) -> Result<(), IniError<Error>> {
+        let line = line.trim_start();
+        if line.is_empty() {
+            Ok(())
+        } else if !line.is_char_boundary(0) {
+            Err(IniError::InvalidLine(lineno))
+        } else {
+            let (prefix, rest) = line.split_at(1);
+            if prefix == "[" {
+                match rest.find(']') {
+                    Some(pos) => {
+                        let (name, _) = rest.split_at(pos);
+                        self.handler.section(name.trim())?;
                     }
-                    Err(_) => match all_consuming(parse_blank)(line) {
-                        Ok(_) => Ok(()),
-                        Err(_) => Err(IniError::InvalidLine(line.to_string())),
-                    },
-                },
-            },
+                    None => return Err(IniError::InvalidLine(lineno)),
+                }
+            } else if prefix == self.start_comment {
+                self.handler.comment(rest.trim_start())?;
+            } else {
+                match line.find('=') {
+                    Some(pos) => {
+                        let (name, rest) = line.split_at(pos);
+                        let (_, value) = rest.split_at(1);
+                        self.handler.option(name.trim(), value.trim())?;
+                    }
+                    None => return Err(IniError::InvalidLine(lineno)),
+                }
+            }
+            Ok(())
         }
     }
 
     /// Parse input from a buffered reader.
     pub fn parse_buffered<B: BufRead>(&mut self, input: B) -> Result<(), IniError<Error>> {
+        let mut lineno = 0;
         for res in input.lines() {
+            lineno += 1;
             match res {
-                Ok(line) => self.parse_ini_line(line.trim_end())?,
+                Ok(line) => self.parse_ini_line(line.trim_end(), lineno)?,
                 Err(err) => return Err(IniError::Io(err)),
             }
         }
@@ -211,55 +191,10 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
 #[cfg(test)]
 mod tests {
 
-    use super::{
-        all_consuming, parse_blank, parse_comment, parse_option, parse_section, IniHandler,
-        IniParser,
-    };
+    use super::{IniError, IniHandler, IniParser};
     use std::error;
     use std::fmt;
     use std::io::{self, Seek, Write};
-
-    #[test]
-    fn parse_sections() {
-        for line in &["[one]", "[ one ]  "] {
-            let (_, name) = all_consuming(parse_section)(line).unwrap();
-            assert_eq!("one", name);
-        }
-        for line in &["[one", "name = value"] {
-            let res = all_consuming(parse_section)(line);
-            assert!(res.is_err(), "parsing should have failed for: {}", line);
-        }
-    }
-
-    #[test]
-    fn parse_options() {
-        let data = [
-            ("name = test", "name", "test"),
-            ("name=one two three  ", "name", "one two three"),
-        ];
-        for (input, expected_key, expected_value) in data {
-            let (output, (key, value)) = parse_option(input).unwrap();
-            assert_eq!(expected_key, key);
-            assert_eq!(expected_value, value.trim_end());
-            assert!(output.is_empty());
-        }
-    }
-
-    #[test]
-    fn parse_blank_lines() {
-        for line in &["", "  \t  "] {
-            all_consuming(parse_blank)(line).unwrap();
-        }
-    }
-
-    #[test]
-    fn parse_comments() {
-        for line in &["; comment", "  ; comment"] {
-            let (output, comment) = parse_comment(line, ';').unwrap();
-            assert_eq!("comment", comment);
-            assert!(output.is_empty());
-        }
-    }
 
     #[derive(Debug)]
     enum ConfigError {
@@ -278,11 +213,13 @@ mod tests {
 
     impl error::Error for ConfigError {}
 
+    #[derive(Debug)]
     enum ConfigSection {
         Default,
         Logging,
     }
 
+    #[derive(Debug)]
     struct Config {
         section: ConfigSection,
         pub name: Option<String>,
@@ -329,6 +266,27 @@ mod tests {
         }
     }
 
+    type ParserError = IniError<ConfigError>;
+    type ParserResult<T> = Result<T, ParserError>;
+
+    fn new_input_stream(content: &str) -> io::Result<io::Cursor<Vec<u8>>> {
+        let mut buf = io::Cursor::new(Vec::<u8>::new());
+        writeln!(buf, "{}", content)?;
+        buf.seek(io::SeekFrom::Start(0))?;
+        Ok(buf)
+    }
+
+    fn read_config(content: &str, start_comment: Option<char>) -> ParserResult<Config> {
+        let mut handler = Config::new();
+        let buf = new_input_stream(content).map_err(IniError::Io)?;
+        let mut parser = match start_comment {
+            Some(ch) => IniParser::with_start_comment(&mut handler, ch),
+            None => IniParser::new(&mut handler),
+        };
+        parser.parse(buf)?;
+        Ok(handler)
+    }
+
     const VALID_INI: &str = "name = test suite
 
 ; logging section
@@ -337,15 +295,10 @@ level = error
 ";
 
     #[test]
-    fn parse_valid_ini() -> io::Result<()> {
-        let mut buf = io::Cursor::new(Vec::<u8>::new());
-        writeln!(buf, "{}", VALID_INI)?;
-        buf.seek(io::SeekFrom::Start(0))?;
-        let mut handler = Config::new();
-        let mut parser = IniParser::new(&mut handler);
-        parser.parse(buf).unwrap();
-        assert_eq!(Some("test suite".to_string()), handler.name);
-        assert_eq!(Some("logging section".to_string()), handler.last_comment);
+    fn parse_valid_ini() -> ParserResult<()> {
+        let config = read_config(VALID_INI, None)?;
+        assert_eq!(Some("test suite".to_string()), config.name);
+        assert_eq!(Some("logging section".to_string()), config.last_comment);
         Ok(())
     }
 
@@ -355,32 +308,45 @@ level = error
 ";
 
     #[test]
-    fn parse_valid_ini_alt_comment() -> io::Result<()> {
-        let mut buf = io::Cursor::new(Vec::<u8>::new());
-        writeln!(buf, "{}", VALID_INI_ALT_COMMENT)?;
-        buf.seek(io::SeekFrom::Start(0))?;
-        let mut handler = Config::new();
-        let mut parser = IniParser::with_start_comment(&mut handler, '#');
-        parser.parse(buf).unwrap();
-        assert_eq!(Some("logging section".to_string()), handler.last_comment);
-        assert_eq!(Some("error".to_string()), handler.level);
+    fn parse_valid_ini_alt_comment() -> ParserResult<()> {
+        let config = read_config(VALID_INI_ALT_COMMENT, Some('#'))?;
+        assert_eq!(Some("logging section".to_string()), config.last_comment);
+        assert_eq!(Some("error".to_string()), config.level);
         Ok(())
     }
 
-    const INVALID_SECTION: &str = "name = test suite
+    const INVALID_SECTION: &str = "name = ok
+
+[logging";
+
+    #[test]
+    fn parse_invalid_section() {
+        let res = dbg!(read_config(INVALID_SECTION, None));
+        assert!(matches!(res, Err(IniError::InvalidLine(3))));
+    }
+
+    const INVALID_OPTION: &str = "[logging]
+level error";
+
+    #[test]
+    fn parse_invalid_option() {
+        let res = dbg!(read_config(INVALID_OPTION, None));
+        assert!(matches!(res, Err(IniError::InvalidLine(2))));
+    }
+
+    const UNEXPECTED_SECTION: &str = "name = test suite
 
 [unknown]
 level = error
 ";
 
     #[test]
-    fn parse_invalid_section() -> io::Result<()> {
-        let mut buf = io::Cursor::new(Vec::<u8>::new());
-        writeln!(buf, "{}", INVALID_SECTION)?;
-        buf.seek(io::SeekFrom::Start(0))?;
-        let mut handler = Config::new();
-        let mut parser = IniParser::new(&mut handler);
-        assert!(parser.parse(buf).is_err());
-        Ok(())
+    /// Parse ini-file with a section considered as invalid in the handler
+    fn parse_unexpected_section() {
+        let res = dbg!(read_config(UNEXPECTED_SECTION, None));
+        assert!(matches!(
+            res,
+            Err(IniError::Handler(ConfigError::InvalidSection))
+        ));
     }
 }
