@@ -131,10 +131,12 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
         let line = line.trim_start();
         if line.is_empty() {
             Ok(())
-        } else if !line.is_char_boundary(0) {
-            Err(IniError::InvalidLine(lineno))
         } else {
-            let (prefix, rest) = line.split_at(1);
+            let (prefix, rest) = if line.is_char_boundary(1) {
+                line.split_at(1)
+            } else {
+                ("", line)
+            };
             if prefix == "[" {
                 match rest.find(']') {
                     Some(pos) => {
@@ -192,81 +194,82 @@ impl<'a, Error: fmt::Debug + error::Error> IniParser<'a, Error> {
 mod tests {
 
     use super::{IniError, IniHandler, IniParser};
-    use std::error;
-    use std::fmt;
-    use std::io::{self, Seek, Write};
+
+    use std::{
+        error, fmt,
+        io::{self, Seek, Write},
+        str,
+    };
 
     #[derive(Debug)]
-    enum ConfigError {
+    enum TestError {
         InvalidSection,
         InvalidOption,
+        Io(io::Error),
+        Utf8(str::Utf8Error),
     }
 
-    impl fmt::Display for ConfigError {
+    impl fmt::Display for TestError {
         fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
-                ConfigError::InvalidSection => write!(fmt, "invalid section"),
-                ConfigError::InvalidOption => write!(fmt, "invalid option"),
+                TestError::InvalidSection => write!(fmt, "invalid section"),
+                TestError::InvalidOption => write!(fmt, "invalid option"),
+                TestError::Io(err) => write!(fmt, "i/o error: {}", err),
+                TestError::Utf8(err) => write!(fmt, "utf-8 error: {}", err),
             }
         }
     }
 
-    impl error::Error for ConfigError {}
+    impl error::Error for TestError {}
 
     #[derive(Debug)]
-    enum ConfigSection {
-        Default,
-        Logging,
+    /// Generic handler for tests
+    ///
+    /// Convert an ini file in a string where:
+    /// - section "[name]" are written <name>
+    /// - option "name = value" are written (name=value)
+    /// - comments are written /*comment*/
+    struct Handler {
+        stream: io::Cursor<Vec<u8>>,
     }
 
-    #[derive(Debug)]
-    struct Config {
-        section: ConfigSection,
-        pub name: Option<String>,
-        pub level: Option<String>,
-        pub last_comment: Option<String>,
-    }
-
-    impl Config {
-        fn new() -> Config {
-            Config {
-                section: ConfigSection::Default,
-                name: None,
-                level: None,
-                last_comment: None,
+    impl Handler {
+        fn new() -> Self {
+            Self {
+                stream: io::Cursor::new(Vec::<u8>::new()),
             }
+        }
+
+        fn get(&self) -> Result<&str, TestError> {
+            str::from_utf8(self.stream.get_ref()).map_err(TestError::Utf8)
         }
     }
 
-    impl IniHandler for Config {
-        type Error = ConfigError;
+    impl IniHandler for Handler {
+        type Error = TestError;
 
         fn section(&mut self, name: &str) -> Result<(), Self::Error> {
-            match name {
-                "logging" => {
-                    self.section = ConfigSection::Logging;
-                    Ok(())
-                }
-                _ => Err(ConfigError::InvalidSection),
+            if name == "invalid" {
+                Err(TestError::InvalidSection)
+            } else {
+                write!(self.stream, "<{}>", name).map_err(Self::Error::Io)
             }
         }
 
-        fn option(&mut self, key: &str, value: &str) -> Result<(), Self::Error> {
-            match self.section {
-                ConfigSection::Default if key == "name" => self.name = Some(value.to_string()),
-                ConfigSection::Logging if key == "level" => self.level = Some(value.to_string()),
-                _ => return Err(ConfigError::InvalidOption),
+        fn option(&mut self, name: &str, value: &str) -> Result<(), Self::Error> {
+            if name == "invalid" {
+                Err(TestError::InvalidOption)
+            } else {
+                write!(self.stream, "({}={})", name, value).map_err(Self::Error::Io)
             }
-            Ok(())
         }
 
         fn comment(&mut self, comment: &str) -> Result<(), Self::Error> {
-            self.last_comment = Some(comment.to_string());
-            Ok(())
+            write!(self.stream, "/*{}*/", comment).map_err(Self::Error::Io)
         }
     }
 
-    type ParserError = IniError<ConfigError>;
+    type ParserError = IniError<TestError>;
     type ParserResult<T> = Result<T, ParserError>;
 
     fn new_input_stream(content: &str) -> io::Result<io::Cursor<Vec<u8>>> {
@@ -276,15 +279,18 @@ mod tests {
         Ok(buf)
     }
 
-    fn read_config(content: &str, start_comment: Option<char>) -> ParserResult<Config> {
-        let mut handler = Config::new();
+    fn read_ini(content: &str, start_comment: Option<char>) -> ParserResult<String> {
+        let mut handler = Handler::new();
         let buf = new_input_stream(content).map_err(IniError::Io)?;
         let mut parser = match start_comment {
             Some(ch) => IniParser::with_start_comment(&mut handler, ch),
             None => IniParser::new(&mut handler),
         };
         parser.parse(buf)?;
-        Ok(handler)
+        handler
+            .get()
+            .map(|s| s.to_string())
+            .map_err(ParserError::Handler)
     }
 
     const VALID_INI: &str = "name = test suite
@@ -296,9 +302,11 @@ level = error
 
     #[test]
     fn parse_valid_ini() -> ParserResult<()> {
-        let config = read_config(VALID_INI, None)?;
-        assert_eq!(Some("test suite".to_string()), config.name);
-        assert_eq!(Some("logging section".to_string()), config.last_comment);
+        let result = read_ini(VALID_INI, None)?;
+        assert_eq!(
+            "(name=test suite)/*logging section*/<logging>(level=error)",
+            result
+        );
         Ok(())
     }
 
@@ -309,9 +317,18 @@ level = error
 
     #[test]
     fn parse_valid_ini_alt_comment() -> ParserResult<()> {
-        let config = read_config(VALID_INI_ALT_COMMENT, Some('#'))?;
-        assert_eq!(Some("logging section".to_string()), config.last_comment);
-        assert_eq!(Some("error".to_string()), config.level);
+        let result = read_ini(VALID_INI_ALT_COMMENT, Some('#'))?;
+        assert_eq!("/*logging section*/<logging>(level=error)", result);
+        Ok(())
+    }
+
+    const VALID_INI_UNICODE: &str = "[ŝipo]
+ĵurnalo = ĉirkaŭ";
+
+    #[test]
+    fn parse_unicode_ini() -> ParserResult<()> {
+        let result = read_ini(VALID_INI_UNICODE, None)?;
+        assert_eq!("<ŝipo>(ĵurnalo=ĉirkaŭ)", result);
         Ok(())
     }
 
@@ -321,7 +338,7 @@ level = error
 
     #[test]
     fn parse_invalid_section() {
-        let res = dbg!(read_config(INVALID_SECTION, None));
+        let res = dbg!(read_ini(INVALID_SECTION, None));
         assert!(matches!(res, Err(IniError::InvalidLine(3))));
     }
 
@@ -330,23 +347,37 @@ level error";
 
     #[test]
     fn parse_invalid_option() {
-        let res = dbg!(read_config(INVALID_OPTION, None));
+        let res = dbg!(read_ini(INVALID_OPTION, None));
         assert!(matches!(res, Err(IniError::InvalidLine(2))));
     }
 
     const UNEXPECTED_SECTION: &str = "name = test suite
 
-[unknown]
+[invalid]
 level = error
 ";
 
     #[test]
     /// Parse ini-file with a section considered as invalid in the handler
     fn parse_unexpected_section() {
-        let res = dbg!(read_config(UNEXPECTED_SECTION, None));
+        let res = dbg!(read_ini(UNEXPECTED_SECTION, None));
         assert!(matches!(
             res,
-            Err(IniError::Handler(ConfigError::InvalidSection))
+            Err(IniError::Handler(TestError::InvalidSection))
+        ));
+    }
+
+    const UNEXPECTED_OPTION: &str = "[logging]
+invalid = error
+";
+
+    #[test]
+    /// Parse ini-file with an option considered as invalid in the handler
+    fn parse_unexpected_option() {
+        let res = dbg!(read_ini(UNEXPECTED_OPTION, None));
+        assert!(matches!(
+            res,
+            Err(IniError::Handler(TestError::InvalidOption))
         ));
     }
 }
