@@ -3,6 +3,7 @@ Light INI parser
 
 ![Rust](https://github.com/lparcq/light-ini/workflows/Rust/badge.svg)
 [![docs.rs](https://docs.rs/ssip-client/badge.svg)](https://docs.rs/light-ini/latest/light_ini/)
+![Crates.io License](https://img.shields.io/crates/l/light-ini)
 
 This library implements an event-driven parser for the [INI file format](https://en.wikipedia.org/wiki/INI_file).
 
