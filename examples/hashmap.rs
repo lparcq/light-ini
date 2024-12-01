@@ -56,7 +56,7 @@ impl IniHandler for Handler {
                     section.insert(key.to_string(), value.to_string());
                     Ok(())
                 }
-                None => return Err(HandlerError::UnknownSection(section_name.to_string())),
+                None => Err(HandlerError::UnknownSection(section_name.to_string())),
             },
         }
     }
