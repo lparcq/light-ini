@@ -2,6 +2,7 @@ Light INI parser
 ================
 
 ![Rust](https://github.com/lparcq/light-ini/workflows/Rust/badge.svg)
+[![docs.rs](https://docs.rs/ssip-client/badge.svg)](https://docs.rs/light-ini/latest/light_ini/)
 
 This library implements an event-driven parser for the [INI file format](https://en.wikipedia.org/wiki/INI_file).
 
@@ -12,8 +13,6 @@ that avoids building an intermediate hash map if it's not necessary.
 [dependencies]
 light_ini = "0.3"
 ```
-
-See the [documentation](https://docs.rs/light-ini) and examples for details.
 
 ## Format
 
