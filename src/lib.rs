@@ -60,12 +60,12 @@ pub enum IniError<HandlerError: fmt::Debug + error::Error> {
     Io(io::Error),
 }
 
-impl<HandlerError: fmt::Debug + error::Error> fmt::Display for IniError<HandlerError> {
+impl<HandlerError: fmt::Display + error::Error> fmt::Display for IniError<HandlerError> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IniError::InvalidLine(line) => write!(f, "invalid line: {}", line),
-            IniError::Handler(err) => write!(f, "handler error: {:?}", err),
-            IniError::Io(err) => write!(f, "input/output error: {:?}", err),
+            IniError::Handler(err) => write!(f, "handler error: {}", err),
+            IniError::Io(err) => write!(f, "input/output error: {}", err),
         }
     }
 }

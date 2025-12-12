@@ -1,4 +1,4 @@
-use light_ini::{IniHandler, IniParser};
+use light_ini::{IniError, IniHandler, IniParser};
 use std::{collections::HashMap, env, error, fmt, path::PathBuf};
 
 #[derive(Debug)]
@@ -62,14 +62,29 @@ impl IniHandler for Handler {
     }
 }
 
-fn main() {
+struct MainError(IniError<HandlerError>);
+
+impl From<IniError<HandlerError>> for MainError {
+    fn from(err: IniError<HandlerError>) -> Self {
+        Self(err)
+    }
+}
+
+impl fmt::Debug for MainError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+fn main() -> Result<(), MainError> {
     for filename in env::args().skip(1) {
         let mut handler = Handler::new();
         let mut parser = IniParser::new(&mut handler);
         let path = PathBuf::from(&filename);
-        parser.parse_file(path).unwrap();
+        parser.parse_file(path)?;
         println!("File {}", filename);
         println!("Globals {:#?}", handler.globals);
         println!("Sections {:#?}", handler.sections);
     }
+    Ok(())
 }
